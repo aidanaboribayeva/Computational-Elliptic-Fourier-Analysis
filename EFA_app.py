@@ -61,7 +61,6 @@ def show_images(paths: List[str], title: str, expanded: bool, ncols: int = 2, im
         cols = st.columns(ncols)
         for i, p in enumerate(resolved):
             with cols[i % ncols]:
-                # Use width parameter to control image size
                 st.image(str(p), width=image_width)
 
 
@@ -113,20 +112,66 @@ def make_id_mapping(original_ids: List[str]) -> Dict[str, str]:
 
 
 # =============================================================================
-# Units (px/mm)
+# Units (px to any unit)
 # =============================================================================
-def px_to_mm(length_px: float, px_per_mm: float) -> float:
-    px_per_mm = float(max(px_per_mm, 1e-12))
-    return float(length_px) / px_per_mm
+
+# Define available units and their conversion factors (relative to mm)
+UNIT_OPTIONS = {
+    "micrometer (μm)": 0.001,
+    "millimeter (mm)": 1.0,
+    "centimeter (cm)": 10.0,
+    "meter (m)": 1000.0,
+    "inch (in)": 25.4,
+}
 
 
-def px2_to_mm2(area_px2: float, px_per_mm: float) -> float:
+def convert_px_to_unit(length_px: float, px_per_mm: float, target_unit: str) -> float:
+    """Convert pixel length to target unit."""
     px_per_mm = float(max(px_per_mm, 1e-12))
-    return float(area_px2) / (px_per_mm ** 2)
+    length_mm = length_px / px_per_mm
+    conversion_factor = UNIT_OPTIONS.get(target_unit, 1.0)
+    return length_mm / conversion_factor
+
+
+def convert_px2_to_unit2(area_px2: float, px_per_mm: float, target_unit: str) -> float:
+    """Convert pixel area to target unit squared."""
+    px_per_mm = float(max(px_per_mm, 1e-12))
+    area_mm2 = area_px2 / (px_per_mm ** 2)
+    conversion_factor = UNIT_OPTIONS.get(target_unit, 1.0)
+    return area_mm2 / (conversion_factor ** 2)
+
+
+def get_unit_label(unit: str, is_area: bool = False) -> str:
+    """Get formatted unit label for display."""
+    if is_area:
+        unit_name = unit.split()[0]
+        if unit_name == "micrometer":
+            return "μm²"
+        elif unit_name == "millimeter":
+            return "mm²"
+        elif unit_name == "centimeter":
+            return "cm²"
+        elif unit_name == "meter":
+            return "m²"
+        elif unit_name == "inch":
+            return "in²"
+    else:
+        unit_name = unit.split()[0]
+        if unit_name == "micrometer":
+            return "μm"
+        elif unit_name == "millimeter":
+            return "mm"
+        elif unit_name == "centimeter":
+            return "cm"
+        elif unit_name == "meter":
+            return "m"
+        elif unit_name == "inch":
+            return "in"
+    return unit
 
 
 # =============================================================================
-# Geometry helpers (your implementations)
+# Geometry helpers
 # =============================================================================
 def _ensure_closed(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     x = np.asarray(x, dtype=float)
@@ -138,9 +183,6 @@ def _ensure_closed(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray
 
 
 def OutlineArea(x, y):
-    """
-    Calculates the area of a closed polygon outline using the vectorized Shoelace Formula.
-    """
     x = asarray(x, dtype=float)
     y = asarray(y, dtype=float)
     x, y = _ensure_closed(x, y)
@@ -154,10 +196,6 @@ def OutlineArea(x, y):
 
 
 def OutlineCircumference(x, y):
-    """
-    Calculates the perimeter (circumference) of a closed polygon outline
-    using vectorized NumPy operations.
-    """
     x = asarray(x)
     y = asarray(y)
     x, y = _ensure_closed(x, y)
@@ -165,7 +203,6 @@ def OutlineCircumference(x, y):
     y_rolled = roll(y, -1)
     dx = x_rolled - x
     dy = y_rolled - y
-
     SegmentLengths = sqrt(dx ** 2 + dy ** 2)
     PolygonLength = np_sum(SegmentLengths)
     return PolygonLength
@@ -180,28 +217,14 @@ def OutlineCentroid(x, y):
 
 def ELLE(ak):
     pi2 = pi / 2.
-    s = 1.  # s=dsin(pi2)
-    cc = 0.  # cc=dcos(pi2)*dcos(pi2)
+    s = 1.
+    cc = 0.
     Q = (1. - s * ak) * (1. + s * ak)
     ELLE_val = s * (elliprf(cc, Q, 1.) - ((s * ak) * (s * ak)) * elliprd(cc, Q, 1.) / 3.)
     return ELLE_val
 
 
 def ComputeEllFourierCoef(No_OutlinePoints, X, Y, No_harmonics):
-    """
-    Computes Elliptic Fourier Descriptors (EFDs) for a closed contour.
-
-    Arguments:
-        No_OutlinePoints (int): Number of points in the contour (N).
-        X (array-like): X-coordinates of the outline points (length N).
-        Y (array-like): Y-coordinates of the outline points (length N).
-        No_harmonics (int): Number of harmonics to calculate (N_H).
-
-    Returns:
-        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: (Ax, Bx, Ay, By)
-        Ax[0] and Ay[0] hold the DC components (Ax0, Ay0).
-        Indices 1 to N_H hold the harmonic coefficients.
-    """
     X = asarray(X, dtype=float64)
     Y = asarray(Y, dtype=float64)
     X_shifted = roll(X, -1)
@@ -209,37 +232,32 @@ def ComputeEllFourierCoef(No_OutlinePoints, X, Y, No_harmonics):
     DXi = X_shifted - X
     DYi = Y_shifted - Y
     DTi = sqrt(DXi ** 2 + DYi ** 2)
-    DTi = where(DTi == 0, 1e-12, DTi)  # Avoid division by zero
+    DTi = where(DTi == 0, 1e-12, DTi)
     R_x = DXi / DTi
     R_y = DYi / DTi
     T_curr = np.cumsum(DTi)
     T_prev = np.concatenate(([0.0], T_curr[:-1]))
-    PolygonLength = T_curr[-1]  # T: The total perimeter length
+    PolygonLength = T_curr[-1]
 
-    # Calculate DC components (Ax0, Ay0)
     Tsum = 0.0
-    Xsum = 0.0  # Sum of Delta X up to segment i-1
-    Ysum = 0.0  # Sum of Delta Y up to segment i-1
+    Xsum = 0.0
+    Ysum = 0.0
     Ax0_integral_sum = 0.0
     Ay0_integral_sum = 0.0
 
     for i in range(No_OutlinePoints):
         DT_i = DTi[i]
         Tnew = Tsum + DT_i
-        #
         Rx_i = R_x[i]
         Ry_i = R_y[i]
-        #
         Xi_i = Xsum - Rx_i * Tsum
         Delta_i = Ysum - Ry_i * Tsum
-        #
         Ax0_integral_sum += 0.5 * Rx_i * (Tnew * Tnew - Tsum * Tsum) + Xi_i * DT_i
         Ay0_integral_sum += 0.5 * Ry_i * (Tnew * Tnew - Tsum * Tsum) + Delta_i * DT_i
-        #
         Tsum = Tnew
         Xsum += DXi[i]
         Ysum += DYi[i]
-        #
+
     if PolygonLength > 0.0:
         Ax0 = X[0] + Ax0_integral_sum / PolygonLength
         Ay0 = Y[0] + Ay0_integral_sum / PolygonLength
@@ -247,7 +265,6 @@ def ComputeEllFourierCoef(No_OutlinePoints, X, Y, No_harmonics):
         Ax0 = X[0]
         Ay0 = Y[0]
 
-    # Initialize coefficient arrays
     Ax = zeros(No_harmonics + 1)
     Bx = zeros(No_harmonics + 1)
     Ay = zeros(No_harmonics + 1)
@@ -259,7 +276,6 @@ def ComputeEllFourierCoef(No_OutlinePoints, X, Y, No_harmonics):
     if No_harmonics == 0 or PolygonLength == 0.0:
         return (Ax, Bx, Ay, By)
 
-    # Calculate harmonic coefficients
     j_harmonics = arange(1, No_harmonics + 1, dtype=np.float64)
     c1_j = 2.0 * pi * j_harmonics / PolygonLength
     Theta_curr = outer(T_curr, c1_j)
@@ -283,19 +299,6 @@ def ComputeEllFourierCoef(No_OutlinePoints, X, Y, No_harmonics):
 
 
 def InverseEllFourier(Ax, Bx, Ay, By, No_XY):
-    """
-    Estimates X,Y-coordinates from Elliptic Fourier coefficients using NumPy vectorization.
-
-    Arguments:
-        Ax (np.ndarray): Fourier coefficients for X-coordinate (Ax[1:] are for harmonics 1 to N_harmonics).
-        Bx (np.ndarray): Fourier coefficients for X-coordinate (harmonics 1 to N_harmonics).
-        Ay (np.ndarray): Fourier coefficients for Y-coordinate (Ay[1:] are for harmonics 1 to N_harmonics).
-        By (np.ndarray): Fourier coefficients for Y-coordinate (harmonics 1 to N_harmonics).
-        No_XY (int): Number of X,Y coordinates to be estimated.
-
-    Returns:
-        Estimated (Xest, Yest) coordinates.
-    """
     No_harmonics = len(Ax) - 1
     n_harmonics = arange(1, No_harmonics + 1)
     i_points = arange(No_XY)
@@ -312,9 +315,6 @@ def InverseEllFourier(Ax, Bx, Ay, By, No_XY):
 
 
 def FourierCoefNormalization(Ax, Bx, Ay, By, No_harmonics, FlagLocation, FlagScale, FlagRotation, FlagStart):
-    """
-    Normalize Fourier coefficients for location, scale, rotation, and starting point.
-    """
     Ax0 = Ax[0]
     Ay0 = Ay[0]
     Ax1 = Ax[1]
@@ -371,9 +371,6 @@ def FourierCoefNormalization(Ax, Bx, Ay, By, No_harmonics, FlagLocation, FlagSca
 
 
 def CoefNormalization(X, Y, XMID, YMID, FlagLocation, FlagScale, FlagRotation, FlagStart, No_harmonics=16):
-    """
-    Wrapper function for coefficient normalization that matches your original code structure.
-    """
     NoP = len(X)
     if FlagLocation == 1:
         X1 = zeros(len(X))
@@ -391,16 +388,6 @@ def CoefNormalization(X, Y, XMID, YMID, FlagLocation, FlagScale, FlagRotation, F
 
 
 def ShapeIndex(Ax, Bx, Ay, By, FlagRotation, psi, XMID, YMID, Scale1, X, Y, N0_sum, LargeNumber):
-    """
-    ae, be  - major and minor ellipse semi-axis
-    K       - shape index (elongation ratio)
-    Le      - circumference of approximated ellipse
-    rc      - radius of circle whose perimeter is equivalent to that of ellipse
-    Sr      - standard deviation of radial distance from centroid to actual
-              particle outline, rd, and that of approximated ellipse, re
-    Uc      - unevenness coefficient, Uc=Sr/rc
-    S1, S2  - sharpness coefficients
-    """
     Bk1 = zeros(64)
     Ask = zeros(64)
     Bsk = zeros(64)
@@ -468,10 +455,8 @@ def ShapeIndex(Ax, Bx, Ay, By, FlagRotation, psi, XMID, YMID, Scale1, X, Y, N0_s
     dx = xp1 - xp
     dy = yp1 - yp
 
-    # Fix for division by zero warning
     with np.errstate(divide='ignore', invalid='ignore'):
         di = where(np.abs(dx) <= 1E-30, 1000.0, dy / dx)
-        # Replace any inf or nan values with 1000.0
         di = where(np.isfinite(di), di, 1000.0)
 
     jj_range = arange(36)
@@ -528,21 +513,15 @@ def ShapeIndex(Ax, Bx, Ay, By, FlagRotation, psi, XMID, YMID, Scale1, X, Y, N0_s
 
 def ShapeIndicesEF(Ax, Bx, Ay, By, No_sum, LargeLimit, SmallLimit, XMID, YMID, FlagScale,
                    Scale1, RotateAngle, StartAngle, No_OutlinePoints, X, Y, No_harmonics):
-    """
-    Calculate shape indices from elliptic Fourier coefficients.
-    """
-    FlagRotation = 1  # Default value
+    FlagRotation = 1
     psi = RotateAngle
 
-    # First, get the basic shape indices from ShapeIndex
     ae, be, k, Le, rc, Uc, S1, S2, Bk1, Bk2, Ask, Bsk = ShapeIndex(
         Ax, Bx, Ay, By, FlagRotation, psi, XMID, YMID, Scale1, X, Y, No_sum, LargeLimit
     )
 
-    # IMPORTANT: In the original code, coefficients are recalculated here
     Ax, Bx, Ay, By = ComputeEllFourierCoef(No_OutlinePoints, X, Y, No_harmonics)
 
-    # Calculate Asymmetricity2 (Ass2)
     NoAss = min(No_harmonics, No_sum)
     Ax_slice = Ax[1:NoAss + 1]
     Bx_slice = Bx[1:NoAss + 1]
@@ -554,20 +533,16 @@ def ShapeIndicesEF(Ax, Bx, Ay, By, No_sum, LargeLimit, SmallLimit, XMID, YMID, F
     abs_Ay = abs(Ay_slice)
     abs_By = abs(By_slice)
 
-    # Calculate SumBx (sum of |Bx|/|Ax| where both > SmallLimit)
     condition_Bx = (abs_Bx > SmallLimit) & (abs_Ax > SmallLimit)
     ratio_Bx_Ax = np.divide(abs_Bx, abs_Ax, out=np.zeros_like(abs_Bx), where=condition_Bx)
     SumBx = np.sum(ratio_Bx_Ax)
 
-    # Calculate SumAy (sum of |Ay|/|By| where both > SmallLimit)
     condition_Ay = (abs_Ay > SmallLimit) & (abs_By > SmallLimit)
     ratio_Ay_By = np.divide(abs_Ay, abs_By, out=np.zeros_like(abs_Ay), where=condition_Ay)
     SumAy = np.sum(ratio_Ay_By)
 
     Ass2 = np.sqrt(SumBx * SumAy) if (SumBx * SumAy) > 0 else 0.0
 
-    # Calculate Asymmetricity1 (Ass1) - using harmonics 2 to 15
-    # Only if we have at least 2 harmonics
     if No_harmonics >= 2:
         NoAss = min(15, No_harmonics)
         Ax_slice = Ax[2:NoAss + 1]
@@ -589,14 +564,11 @@ def ShapeIndicesEF(Ax, Bx, Ay, By, No_sum, LargeLimit, SmallLimit, XMID, YMID, F
         if SumAx > 0.0 and SumBy > 0.0:
             Ass1 = np.sqrt((SumBx / SumAx) * (SumAy / SumBy))
 
-        # Calculate Polygonality (P) - only if we have at least 2 harmonics
-        # Initialize with default values
         NoMaxAx1 = 1
         NoMaxBy1 = 1
         MaxAx = abs(Ax[1])
         MaxBy = abs(By[1])
 
-        # Find first maximum
         j = 1
         while j <= No_harmonics:
             if MaxAx < abs(Ax[j]):
@@ -607,9 +579,8 @@ def ShapeIndicesEF(Ax, Bx, Ay, By, No_sum, LargeLimit, SmallLimit, XMID, YMID, F
                 NoMaxBy1 = j
             j = j + 1
 
-        # Find second maximum
         j = 1
-        MaxAx2 = -1  # Start with a very small value
+        MaxAx2 = -1
         MaxBy2 = -1
         NoMaxAx = 1
         NoMaxBy = 1
@@ -629,42 +600,34 @@ def ShapeIndicesEF(Ax, Bx, Ay, By, No_sum, LargeLimit, SmallLimit, XMID, YMID, F
         Py = NoMaxBy + 1
         P = np.sqrt(Px * Py)
     else:
-        # For single harmonic, set default values
         Ass1 = 0.0
-        P = 1.0  # Minimum polygonality
+        P = 1.0
 
     return (ae, be, k, Le, rc, Uc, S1, S2, Bk1, Bk2, Ask, Bsk, Ass1, Ass2, P)
 
 
 def ComputeAngularity(Ax, Bx, Ay, By, No_harmonics, w=360):
-    """
-    Compute angularity index (AIg) using Fourier coefficients
-    """
     if No_harmonics < 1 or len(Ax) < 2:
-        return 0.0  # Return default value if not enough harmonics
+        return 0.0
 
     TwoPi = 2.0 * pi
     angles = np.linspace(0, TwoPi, w, endpoint=False)
     n_array = np.arange(1, No_harmonics + 1)
 
-    # Create the matrix for n*u (angles x harmonics)
     n_u = np.outer(angles, n_array)
     sin_n_u = np.sin(n_u)
     cos_n_u = np.cos(n_u)
 
-    # Get coefficients for harmonics 1 to No_harmonics
     Ax_n = Ax[1:No_harmonics + 1]
     Bx_n = Bx[1:No_harmonics + 1]
     Ay_n = Ay[1:No_harmonics + 1]
     By_n = By[1:No_harmonics + 1]
 
-    # Multiply by harmonic number
     nAx = n_array * Ax_n
     nBx = n_array * Bx_n
     nAy = n_array * Ay_n
     nBy = n_array * By_n
 
-    # Calculate derivatives
     x_deriv = np.sum(-nAx[:, np.newaxis] * sin_n_u.T + nBx[:, np.newaxis] * cos_n_u.T, axis=0)
     y_deriv = np.sum(-nAy[:, np.newaxis] * sin_n_u.T + nBy[:, np.newaxis] * cos_n_u.T, axis=0)
 
@@ -676,9 +639,6 @@ def ComputeAngularity(Ax, Bx, Ay, By, No_harmonics, w=360):
 
 
 def ShapeFactors(NoP, X, Y, Area, Perimeter):
-    """
-    Calculate shape factors: Elongation, Bulkiness, Surface, Circularity, Sphericity
-    """
     Pi = np.pi
     Xm = np.mean(X)
     Ym = np.mean(Y)
@@ -723,7 +683,7 @@ def ShapeFactors(NoP, X, Y, Area, Perimeter):
 
 
 # =============================================================================
-# Fixed computation params (matching your original code)
+# Fixed computation params
 # =============================================================================
 @dataclass(frozen=True)
 class ShapeParams:
@@ -750,7 +710,7 @@ PARAMS_FIXED = ShapeParams(
 
 
 # =============================================================================
-# Batch computation (matching your original code structure)
+# Batch computation
 # =============================================================================
 def compute_shape_indices(df_xy: pd.DataFrame, params: ShapeParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
     results = []
@@ -763,14 +723,11 @@ def compute_shape_indices(df_xy: pd.DataFrame, params: ShapeParams) -> Tuple[pd.
             if len(X) < 3:
                 raise ValueError("Too few points")
 
-            # Ensure closed contour
             X, Y = _ensure_closed(X, Y)
             NoP = len(X)
 
-            # Calculate centroid
             XMID, YMID = OutlineCentroid(X, Y)
 
-            # Compute normalized Fourier coefficients (these will be used for ShapeIndex only)
             Ax, Bx, Ay, By, Scale1, RotateAngle, StartAngle = CoefNormalization(
                 X, Y, XMID, YMID,
                 params.flag_location,
@@ -780,10 +737,8 @@ def compute_shape_indices(df_xy: pd.DataFrame, params: ShapeParams) -> Tuple[pd.
                 params.No_harmonics
             )
 
-            # Calculate shape indices from EFA
-            # Note: ShapeIndicesEF will recalculate coefficients internally
             ae, be, k, Le, rc, Uc, S1, S2, Bk1, Bk2, Ask, Bsk, Ass1, Ass2, P = ShapeIndicesEF(
-                Ax, Bx, Ay, By,  # These are passed but will be recalculated inside
+                Ax, Bx, Ay, By,
                 params.no_sum,
                 params.large_limit,
                 params.small_limit,
@@ -798,16 +753,12 @@ def compute_shape_indices(df_xy: pd.DataFrame, params: ShapeParams) -> Tuple[pd.
                 params.No_harmonics
             )
 
-            # Calculate angularity using the original coefficients
-            # We need to recalculate coefficients for angularity too
             Ax_raw, Bx_raw, Ay_raw, By_raw = ComputeEllFourierCoef(NoP, X, Y, params.No_harmonics)
             AIg = ComputeAngularity(Ax_raw, Bx_raw, Ay_raw, By_raw, No_harmonics=params.no_sum, w=360)
 
-            # Basic geometry
             area = OutlineArea(X, Y)
             perimeter = OutlineCircumference(X, Y)
 
-            # Calculate shape factors
             elongation, bulkiness, surface, circularity, sphericity = ShapeFactors(
                 NoP, X, Y, area, perimeter
             )
@@ -840,14 +791,10 @@ def compute_shape_indices(df_xy: pd.DataFrame, params: ShapeParams) -> Tuple[pd.
 # Module 1 plots
 # =============================================================================
 def plot_reconstruction(x: np.ndarray, y: np.ndarray, K: int):
-    """Plot original outline and reconstruction using inverse Fourier transform."""
     x, y = _ensure_closed(x, y)
     NoP = len(x)
 
-    # Compute coefficients
     Ax, Bx, Ay, By = ComputeEllFourierCoef(NoP, x, y, K)
-
-    # Reconstruct with same number of points
     xt, yt = InverseEllFourier(Ax, Bx, Ay, By, NoP)
 
     fig, ax = plt.subplots(figsize=(3.6, 3.6), dpi=600)
@@ -861,10 +808,6 @@ def plot_reconstruction(x: np.ndarray, y: np.ndarray, K: int):
 
 
 def fit_ellipse_equal_area(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float, float, float]:
-    """
-    Covariance-based ellipse orientation + scale to match polygon area.
-    Returns (cx, cy, a, b, theta) with a>=b.
-    """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     cx, cy = OutlineCentroid(x, y)
@@ -901,19 +844,15 @@ def equal_area_circle_radius(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def plot_ellipse_and_circle(x: np.ndarray, y: np.ndarray):
-    """Plot equal-area ellipse and circle."""
     x, y = _ensure_closed(x, y)
 
-    # Get ellipse parameters and circle radius using the existing functions
     cx, cy, a, b, theta = fit_ellipse_equal_area(x, y)
     r = equal_area_circle_radius(x, y)
 
-    # Generate ellipse points
     t = np.linspace(0, 2 * np.pi, 300)
     ex = cx + a * np.cos(t) * np.cos(theta) - b * np.sin(t) * np.sin(theta)
     ey = cy + a * np.cos(t) * np.sin(theta) + b * np.sin(t) * np.cos(theta)
 
-    # Generate circle points
     cxr = cx + r * np.cos(t)
     cyr = cy + r * np.sin(t)
 
@@ -926,13 +865,8 @@ def plot_ellipse_and_circle(x: np.ndarray, y: np.ndarray):
     ax.legend(loc="best", fontsize=8)
     ax.set_title("Equal-area ellipse and circle", fontsize=11)
 
-    # Optional debug info
-    print(f"Ellipse: a={a:.2f}, b={b:.2f}, ratio={b / a:.3f}")
-    print(f"Circle radius: r={r:.2f}")
-    print(f"Ellipse area (π*a*b): {np.pi * a * b:.2f}")
-    print(f"Original area: {OutlineArea(x, y):.2f}")
-
     return fig
+
 
 # =============================================================================
 # Contour-fit metrics
@@ -966,7 +900,6 @@ def _best_shift_sse(A: np.ndarray, B: np.ndarray) -> float:
 
 
 def contour_fit_metrics(x, y, xt, yt, m: int = 200) -> Tuple[float, float]:
-    """Return (R², NRMSE)."""
     x1, y1 = _resample_closed_contour(x, y, m=m)
     x2, y2 = _resample_closed_contour(xt, yt, m=m)
 
@@ -982,49 +915,6 @@ def contour_fit_metrics(x, y, xt, yt, m: int = 200) -> Tuple[float, float]:
 
 
 # =============================================================================
-# Figure_5-style histogram helper (percentiles legend)
-# =============================================================================
-def percentile_histogram(df: pd.DataFrame, col: str, xlabel: str) -> plt.Figure:
-    data = pd.to_numeric(df[col], errors="coerce").dropna().to_numpy(dtype=float)
-    fig, ax = plt.subplots(figsize=(5.0, 4.0), dpi=170)
-
-    if data.size == 0:
-        ax.text(0.5, 0.5, "No data", ha="center", va="center")
-        ax.set_axis_off()
-        return fig
-
-    p10 = float(np.percentile(data, 10))
-    p50 = float(np.percentile(data, 50))
-    p90 = float(np.percentile(data, 90))
-
-    ax.hist(data, bins=30, density=True, alpha=0.7, edgecolor="black")
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Probability")
-    ax.legend([f"10% = {p10:.3f}\n50% = {p50:.3f}\n90% = {p90:.3f}"], fontsize=11, frameon=True)
-    ax.grid(True, alpha=0.20)
-    fig.tight_layout()
-    return fig
-
-
-def general_statistics_table(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
-    numeric = df[cols].apply(pd.to_numeric, errors="coerce")
-    desc = numeric.describe(percentiles=[0.10, 0.50, 0.90]).T
-    desc = desc.rename(
-        columns={
-            "count": "count",
-            "mean": "mean",
-            "std": "std",
-            "min": "min",
-            "10%": "p10",
-            "50%": "p50",
-            "90%": "p90",
-            "max": "max",
-        }
-    )
-    return desc.reset_index().rename(columns={"index": "descriptor"})
-
-
-# =============================================================================
 # Streamlit UI
 # =============================================================================
 st.set_page_config(page_title="Shape Analysis", layout="wide")
@@ -1032,28 +922,26 @@ st.title("🔬 Shape Analysis with Elliptic Fourier Descriptors")
 
 uploaded = st.sidebar.file_uploader("Upload CSV (ID, X, Y)", type=["csv"])
 
-# # Font size control
-# font_size = st.sidebar.slider("Text size", min_value=14, max_value=24, value=18, step=1)
-# st.markdown(
-#     f"""
-#     <style>
-#       html, body, [class*="css"] {{ font-size: {font_size}px !important; }}
-#       section[data-testid="stSidebar"] * {{ font-size: {font_size}px !important; }}
-#       .stMetricValue {{ font-size: {min(font_size + 12, 34)}px !important; }}
-#       .stMetricLabel {{ font-size: {max(font_size - 2, 12)}px !important; }}
-#     </style>
-#     """,
-#     unsafe_allow_html=True,
-# )
-
 EXPANDED = True
 
 st.sidebar.markdown("---")
+# IMPORTANT: module selection must be defined BEFORE the if uploaded is None check
 module = st.sidebar.radio("Modules", ["Module 1", "Module 2", "Module 3"], index=0)
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("📏 Set Scale", expanded=True):
-    px_per_mm = st.number_input("px/mm", min_value=0.0001, value=77.0, step=0.1)
+with st.sidebar.expander("📏 Set Scale & Units", expanded=True):
+    px_per_mm = st.number_input("px/mm calibration", min_value=0.0001, value=77.0, step=0.1,
+                                help="Number of pixels per millimeter in your image")
+
+    selected_unit = st.selectbox(
+        "Output unit",
+        options=list(UNIT_OPTIONS.keys()),
+        index=1,
+        help="Select the unit for area and perimeter measurements"
+    )
+
+    st.caption(
+        f"Example: 1 px = {1 / px_per_mm:.4f} mm = {1 / px_per_mm / UNIT_OPTIONS[selected_unit]:.4f} {selected_unit.split()[0]}")
 
 if uploaded is None:
     st.info("⬅️ Upload a CSV to start.")
@@ -1080,6 +968,7 @@ reverse_map = {v: k for k, v in id_map.items()}
 
 st.caption(f"Detected **{df_xy['ID'].nunique()}** particles and **{len(df_xy)}** outline points.")
 
+
 # =============================================================================
 # Module 1
 # =============================================================================
@@ -1092,7 +981,6 @@ if module == "Module 1":
             "Observe how the outline converges to the original shape using inverse Fourier transform."
         )
 
-    # Module 1 instruction figures
     show_images(["Module1_1.png", "Module1_2.png"], "📌 EFA reconstruction method", expanded=EXPANDED, ncols=2, image_width=800)
 
     display_ids = [id_map[o] for o in original_ids]
@@ -1113,12 +1001,17 @@ if module == "Module 1":
     c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
     with c1:
         st.metric("Area (px²)", f"{area_px2:.4g}")
-        st.metric("Area (mm²)", f"{px2_to_mm2(area_px2, px_per_mm):.4g}")
+        area_unit2 = convert_px2_to_unit2(area_px2, px_per_mm, selected_unit)
+        unit_label = get_unit_label(selected_unit, is_area=True)
+        st.metric(f"Area ({unit_label})", f"{area_unit2:.4g}")
     with c2:
         st.metric("Perimeter (px)", f"{per_px:.4g}")
-        st.metric("Perimeter (mm)", f"{px_to_mm(per_px, px_per_mm):.4g}")
+        per_unit = convert_px_to_unit(per_px, px_per_mm, selected_unit)
+        unit_label_len = get_unit_label(selected_unit, is_area=False)
+        st.metric(f"Perimeter ({unit_label_len})", f"{per_unit:.4g}")
     with c3:
         st.metric("px/mm", f"{px_per_mm:.4g}")
+        st.metric("Unit", f"{unit_label_len}")
 
     maxK = 40
     K = st.slider("Harmonic order (K)", min_value=1, max_value=maxK, value=min(10, maxK))
@@ -1156,7 +1049,6 @@ elif module == "Module 2":
             "as harmonic order increases."
         )
 
-    # Module 2 instruction figure
     show_images(["Module2_1.png"], "📌 Asymmetricity and Polygonality equations",
                 expanded=EXPANDED, ncols=1, image_width=400)
 
@@ -1180,7 +1072,6 @@ elif module == "Module 2":
         sens = None
         st.info("Settings changed. Click **Run sensitivity** to compute.")
 
-
     @st.cache_data(show_spinner=False)
     def _compute_for_N(h: str, df_xy_local: pd.DataFrame, N: int) -> pd.DataFrame:
         p = ShapeParams(
@@ -1200,7 +1091,6 @@ elif module == "Module 2":
         out = out.rename(columns={"asymmetricity2": "Asymmetricity", "polygonality": "Polygonality"})
         out["Harmonics"] = int(N)
         return out
-
 
     run = st.button("Run sensitivity", type="primary")
     if run:
@@ -1234,27 +1124,21 @@ elif module == "Module 2":
 
     sens_sel = sens[sens["Harmonics"].isin(chosen_N)].copy()
 
-
-    # Function to create simplified boxplot with matplotlib (no mean/median markers)
     def create_sensitivity_boxplot(data, y_col, title, color):
         fig, ax = plt.subplots(figsize=(6, 4))
 
-        # Prepare data for boxplot
         harmonics = sorted(data['Harmonics'].unique())
         box_data = [data[data['Harmonics'] == h][y_col].dropna() for h in harmonics]
 
-        # Create boxplot
         bp = ax.boxplot(box_data, positions=range(len(harmonics)),
                         patch_artist=True, widths=0.6)
 
-        # Color the boxes
         for box in bp['boxes']:
             box.set_facecolor(color)
             box.set_alpha(0.7)
             box.set_edgecolor('black')
             box.set_linewidth(1)
 
-        # Style whiskers, caps, medians
         for whisker in bp['whiskers']:
             whisker.set_color('black')
             whisker.set_linewidth(1)
@@ -1281,29 +1165,25 @@ elif module == "Module 2":
         plt.tight_layout()
         return fig
 
-
     with st.expander("Sensitivity Boxplots", expanded=EXPANDED):
-        # Create two columns for the plots
         col1, col2 = st.columns(2)
 
         with col1:
-            # Asymmetricity boxplot with yellow/gold
             fig_asym = create_sensitivity_boxplot(
                 sens_sel,
                 'Asymmetricity',
                 'Asymmetricity Sensitivity',
-                '#FFD700'  # Yellow/gold
+                '#FFD700'
             )
             st.pyplot(fig_asym, width='stretch')
             plt.close(fig_asym)
 
         with col2:
-            # Polygonality boxplot with sea green
             fig_poly = create_sensitivity_boxplot(
                 sens_sel,
                 'Polygonality',
                 'Polygonality Sensitivity',
-                '#2E8B57'  # Sea green
+                '#2E8B57'
             )
             st.pyplot(fig_poly, width='stretch')
             plt.close(fig_poly)
@@ -1311,10 +1191,8 @@ elif module == "Module 2":
     with st.expander("📉 Stabilization Trend (Median Values)", expanded=False):
         trend = sens.groupby("Harmonics")[["Asymmetricity", "Polygonality"]].median().reset_index()
 
-        # Create matplotlib line plots
         fig_trend, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 
-        # Asymmetricity trend
         ax1.plot(trend['Harmonics'], trend['Asymmetricity'], 'o-', color='#FFD700',
                  linewidth=2, markersize=8, markerfacecolor='white', markeredgewidth=2)
         ax1.set_xlabel('Harmonic Order', fontsize=11)
@@ -1323,7 +1201,6 @@ elif module == "Module 2":
         ax1.grid(True, alpha=0.2)
         ax1.set_xticks(trend['Harmonics'])
 
-        # Polygonality trend
         ax2.plot(trend['Harmonics'], trend['Polygonality'], 'o-', color='#2E8B57',
                  linewidth=2, markersize=8, markerfacecolor='white', markeredgewidth=2)
         ax2.set_xlabel('Harmonic Order', fontsize=11)
@@ -1336,7 +1213,6 @@ elif module == "Module 2":
         st.pyplot(fig_trend, width='stretch')
         plt.close(fig_trend)
 
-        # Identify stabilization point
         st.markdown("**Stabilization Analysis:**")
         col1, col2 = st.columns(2)
 
@@ -1361,11 +1237,11 @@ elif module == "Module 2":
 
     st.download_button(
         "⬇️ Download sensitivity table",
-        data=sens_sel[["Particle_ID", "Harmonics", "Asymmetricity", "Polygonality"]].to_csv(index=False).encode(
-            "utf-8"),
+        data=sens_sel[["Particle_ID", "Harmonics", "Asymmetricity", "Polygonality"]].to_csv(index=False).encode("utf-8"),
         file_name="sensitivity_table.csv",
         mime="text/csv",
     )
+
 
 # =============================================================================
 # Module 3
@@ -1380,15 +1256,14 @@ else:
             "sensitivity analysis results from Module 2."
         )
 
-    # Module 3 instruction figures
     show_images(
         ["Module3_1.png", "Module3_2.png", "Module3_3.png", "Module3_4.png"],
-        "📌 Multiscale shape characterization",
+        "📌 Module 3 statistical analysis methods",
         expanded=EXPANDED,
-        ncols=2, image_width=800
+        ncols=2,
+        image_width=250
     )
 
-    # Add harmonic order selection before running EFA
     st.subheader("⚙️ Analysis Settings")
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -1402,7 +1277,6 @@ else:
             step=1
         )
 
-    # Update params with selected harmonics
     current_params = ShapeParams(
         No_harmonics=selected_harmonics,
         no_sum=selected_harmonics,
@@ -1436,10 +1310,12 @@ else:
         res = res.copy()
         res["Particle_ID"] = res["ID"].map(id_map).fillna(res["ID"])
 
-        # Add unit conversions
-        res["area_mm2"] = res["area"].apply(lambda v: px2_to_mm2(v, px_per_mm))
-        res["perimeter_mm"] = res["perimeter"].apply(lambda v: px_to_mm(v, px_per_mm))
+        res["area_converted"] = res["area"].apply(lambda v: convert_px2_to_unit2(v, px_per_mm, selected_unit))
+        res["perimeter_converted"] = res["perimeter"].apply(lambda v: convert_px_to_unit(v, px_per_mm, selected_unit))
 
+        st.session_state["selected_unit"] = selected_unit
+        st.session_state["unit_label_area"] = get_unit_label(selected_unit, is_area=True)
+        st.session_state["unit_label_len"] = get_unit_label(selected_unit, is_area=False)
         st.session_state["module3_results"] = res
         st.session_state["module3_errors"] = err
         st.session_state["module3_key"] = key3
@@ -1464,10 +1340,13 @@ else:
         with st.expander("Errors", expanded=False):
             st.dataframe(errors_df, use_container_width=True)
 
-    # Enhanced distribution plots with KDE and boxplots
     with st.expander("📊 Distribution Analysis (Histogram + KDE + Boxplot)", expanded=EXPANDED):
-        # Define display names mapping
+        unit_label_area = st.session_state.get("unit_label_area", "mm²")
+        unit_label_len = st.session_state.get("unit_label_len", "mm")
+
         display_names = {
+            "area_converted": f"Area ({unit_label_area})",
+            "perimeter_converted": f"Perimeter ({unit_label_len})",
             "Kael": "Elongation Ratio",
             "angularity": "Angularity",
             "surface_roughness": "Surface Roughness",
@@ -1482,6 +1361,8 @@ else:
         }
 
         dist_cols = [
+            ("area_converted", f"Area ({unit_label_area})"),
+            ("perimeter_converted", f"Perimeter ({unit_label_len})"),
             ("Kael", "Elongation Ratio"),
             ("angularity", "Angularity"),
             ("surface_roughness", "Surface Roughness"),
@@ -1495,29 +1376,26 @@ else:
             ("sphericity", "Sphericity")
         ]
 
-
-        # Function to create enhanced distribution plot with KDE and boxplot subplot
         def enhanced_distribution_plot(data, col, display_name):
             fig = plt.figure(figsize=(8, 6), dpi=150)
-
-            # Create grid for subplots
             gs = fig.add_gridspec(4, 1, hspace=0.3, height_ratios=[3, 1, 3, 1])
 
-            # Main histogram with KDE
             ax1 = fig.add_subplot(gs[0, 0])
             values = data[col].dropna()
 
-            # Histogram
+            if len(values) == 0:
+                ax1.text(0.5, 0.5, "No data available", ha="center", va="center")
+                ax1.set_title(f'{display_name} Distribution', fontsize=12, fontweight='bold')
+                return fig
+
             n, bins, patches = ax1.hist(values, bins=20, density=True, alpha=0.7,
                                         color='steelblue', edgecolor='black', linewidth=0.5)
 
-            # KDE plot
             from scipy import stats
             kde = stats.gaussian_kde(values)
             x_range = np.linspace(values.min(), values.max(), 200)
             ax1.plot(x_range, kde(x_range), 'r-', linewidth=2, label='KDE')
 
-            # Add mean and median lines
             mean_val = values.mean()
             median_val = values.median()
             ax1.axvline(mean_val, color='green', linestyle='--', linewidth=1.5, label=f'Mean: {mean_val:.3f}')
@@ -1528,7 +1406,6 @@ else:
             ax1.legend(loc='upper right', fontsize=8)
             ax1.grid(True, alpha=0.2)
 
-            # Boxplot below first histogram
             ax2 = fig.add_subplot(gs[1, 0])
             bp = ax2.boxplot(values, vert=False, patch_artist=True, widths=0.6)
             bp['boxes'][0].set_facecolor('lightblue')
@@ -1543,8 +1420,6 @@ else:
 
             return fig
 
-
-        # Create 2-column layout for the enhanced plots
         cols = st.columns(2)
         plot_count = 0
 
@@ -1555,7 +1430,6 @@ else:
                     st.pyplot(fig, width='stretch')
                     plt.close(fig)
 
-                    # Add statistics in a small table below the plot
                     stats_data = results_df[col].describe(percentiles=[.25, .5, .75])
                     stats_df = pd.DataFrame({
                         'Statistic': ['Count', 'Mean', 'Std', 'Min', '25%', 'Median', '75%', 'Max'],
@@ -1573,16 +1447,10 @@ else:
                     st.dataframe(stats_df, use_container_width=True, hide_index=True)
                 plot_count += 1
 
-    # Enhanced general statistics with proper naming
     with st.expander("📋 Summary Statistics", expanded=EXPANDED):
-        stat_cols = [
-            "Kael", "angularity", "surface_roughness",
-            "asymmetricity1", "asymmetricity2", "polygonality",
-            "elongation", "bulkiness", "surface", "circularity", "sphericity"
-        ]
+        stat_cols = ["area_converted", "perimeter_converted"] + [col for col, _ in dist_cols if col not in ["area_converted", "perimeter_converted"]]
         stat_cols = [c for c in stat_cols if c in results_df.columns]
 
-        # Create statistics table with display names
         stats_data = []
         for col in stat_cols:
             display_name = display_names.get(col, col)
@@ -1611,16 +1479,9 @@ else:
             mime="text/csv",
         )
 
-    # Enhanced correlation matrix with triangle=True and automated observations
     with st.expander("🔗 Correlation Matrix", expanded=EXPANDED):
-        corr_cols = [
-            "Kael", "angularity", "surface_roughness",
-            "asymmetricity1", "asymmetricity2", "polygonality",
-            "elongation", "bulkiness", "surface", "circularity", "sphericity"
-        ]
-        corr_cols = [c for c in corr_cols if c in results_df.columns]
+        corr_cols = stat_cols
 
-        # Rename columns for display
         corr_df = results_df[corr_cols].copy()
         corr_df.rename(columns=display_names, inplace=True)
 
@@ -1633,7 +1494,6 @@ else:
             mime="text/csv",
         )
 
-        # Create correlation matrix with triangle=True
         fig_corr = px.imshow(
             corr,
             aspect="auto",
@@ -1644,10 +1504,8 @@ else:
             title="Correlation Matrix (Pearson)",
         )
 
-        # Make it triangular (show only lower triangle)
         mask = np.triu(np.ones_like(corr), k=1).astype(bool)
 
-        # Update the figure to show only lower triangle
         fig_corr.update_traces(
             z=np.where(mask, np.nan, corr.values),
             text=np.where(mask, "", np.round(corr.values, 2).astype(str))
@@ -1662,16 +1520,14 @@ else:
         )
         st.plotly_chart(fig_corr, width='stretch')
 
-        # Automatically generate key observations from correlation matrix
-        st.markdown("**Key Observations**")
+        st.markdown("### 🔍 Key Observations")
 
-        # Get unique pairs from lower triangle (excluding diagonal)
         observations = []
         corr_values = []
 
         for i, row in enumerate(corr.index):
             for j, col in enumerate(corr.columns):
-                if i > j:  # Lower triangle
+                if i > j:
                     val = corr.iloc[i, j]
                     if not np.isnan(val):
                         strength = "Very strong" if abs(val) >= 0.8 else \
@@ -1679,17 +1535,30 @@ else:
                                 "Moderate" if abs(val) >= 0.4 else \
                                     "Weak" if abs(val) >= 0.2 else "Very weak"
                         direction = "positive" if val > 0 else "negative"
-                        observations.append(
-                            f"- {strength} {direction} correlation between **{row}** and **{col}** ({val:.2f})")
+                        observations.append(f"- {strength} {direction} correlation between **{row}** and **{col}** ({val:.2f})")
                         corr_values.append(abs(val))
 
-        # Sort observations by absolute correlation strength and show top 8
         sorted_obs = [x for _, x in sorted(zip(corr_values, observations), reverse=True)]
 
         st.markdown("**Top strongest correlations:**")
-        for obs in sorted_obs[:8]:  # Show top 8 strongest correlations
+        for obs in sorted_obs[:8]:
             st.markdown(obs)
-        # Add correlation interpretation guide
+
+        st.markdown("\n**Indices with generally weak correlations to others:**")
+        weak_indices = []
+        for idx in corr.index:
+            idx_corrs = [corr.loc[idx, col] for col in corr.columns if col != idx and not np.isnan(corr.loc[idx, col])]
+            if idx_corrs:
+                avg_abs_corr = np.mean([abs(c) for c in idx_corrs])
+                if avg_abs_corr < 0.3:
+                    weak_indices.append(f"- **{idx}** (average |r| = {avg_abs_corr:.2f})")
+
+        if weak_indices:
+            for weak_idx in weak_indices[:5]:
+                st.markdown(weak_idx)
+        else:
+            st.markdown("- No indices with consistently weak correlations found")
+
         st.markdown("""
         ---
         **Correlation Interpretation (based on absolute value):**
