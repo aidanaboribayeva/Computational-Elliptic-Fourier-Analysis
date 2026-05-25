@@ -29,6 +29,14 @@ ASSETS_DIRS = [
     APP_DIR,
 ]
 
+def show_citation():
+    """Display the citation block in the Streamlit app."""
+    st.markdown("---")
+    st.markdown("""
+    **If you use this app or code in your work, please cite:**
+
+    **Boribayeva, A., Sultaniyar, S., Lukmanov, I., Baigarina, A., Rojas-Solórzano, L. R., Curtis, J. S., Govender N. & Golman, B. (2026). Integrated characterization, classification, and quasi-3D reconstruction of highly irregular particles using multiscale shape descriptors for predictive DEM flow simulation. *Powder Technology*, 122435. DOI: 10.1016/j.powtec.2026.122435**
+    """)
 
 def _resolve_image(path_or_name: str) -> Optional[Path]:
     """Resolve an image by absolute path or by filename in ./assets or ./Instruction images."""
@@ -973,6 +981,7 @@ st.caption(f"Detected **{df_xy['ID'].nunique()}** particles and **{len(df_xy)}**
 # Module 1
 # =============================================================================
 if module == "Module 1":
+    show_citation()
     st.header("Module 1 — Outline Reconstruction with EFA")
 
     with st.expander("📘 Instructions", expanded=True):
@@ -1040,6 +1049,7 @@ if module == "Module 1":
 # Module 2
 # =============================================================================
 elif module == "Module 2":
+    show_citation()
     st.header("Module 2 — Sensitivity Analysis")
 
     with st.expander("📘 Instructions", expanded=True):
@@ -1247,6 +1257,7 @@ elif module == "Module 2":
 # Module 3
 # =============================================================================
 else:
+    show_citation()
     st.header("Module 3 — Comprehensive Shape Statistics")
 
     with st.expander("📘 Instructions", expanded=True):
