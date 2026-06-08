@@ -14,6 +14,4 @@ An interactive **Streamlit web app** for particle shape analysis using EFA (Elli
 
 If you use this app or code in your work, please cite:
 
-Boribayeva, A., Sultaniyar, S., Lukmanov, I., Baigarina, A., Rojas-Solórzano, L. R., Curtis, J. S., Govender N. & Golman, B. (2026). Integrated characterization, classification, and quasi-3D reconstruction of highly irregular particles using multiscale shape descriptors for predictive DEM flow simulation. Powder Technology, 122435.
-
-Boribayeva, A., Sultaniyar, S., Lukmanov, I., Baigarina, A., Rojas-Solórzano, L. R., Curtis, J. S., Govender N. & Golman, B. (2026). Integrated characterization, classification, and quasi-3D reconstruction of highly irregular particles using multiscale shape descriptors for predictive DEM flow simulation. Powder Technology, 122435.
+Boribayeva, A., Sultaniyar, S., Lukmanov, I., Baigarina, A., Rojas-Solórzano, L. R., Curtis, J. S., Govender N. & Golman, B. (2026). Integrated characterization, classification, and quasi-3D reconstruction of highly irregular particles using multiscale shape descriptors for predictive DEM flow simulation. Powder Technology, 122435. 10.1016/j.powtec.2026.122435
