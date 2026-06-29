@@ -76,23 +76,144 @@ def show_images(paths: List[str], title: str, expanded: bool, ncols: int = 2, im
 
 
 # =============================================================================
-# CSV loader
+# Data loader (CSV / TXT / TSV / Excel)
 # =============================================================================
-def load_xy_csv(file_bytes: bytes) -> pd.DataFrame:
-    """Robust loader for ID, X, Y (handles , ; tab)."""
-    df = None
-    for sep in [",", ";", "\t", None]:
+
+# -----------------------------------------------------------------------------
+# Why each particle needs at least 3 points
+# -----------------------------------------------------------------------------
+# Every particle is described by an ordered list of (X, Y) points forming a
+# CLOSED outline. The whole analysis (area, perimeter, Elliptic Fourier
+# Descriptors, etc.) treats that outline as a polygon.
+#   - 1 point  = just a dot           -> no shape, no area, no perimeter
+#   - 2 points = a straight line      -> still no enclosed area
+#   - 3 points = a triangle           -> the smallest real closed shape
+# So 3 is the hard minimum below which the math is undefined. Particles with
+# fewer points are skipped (not analyzed) rather than producing garbage numbers.
+MIN_POINTS_PER_PARTICLE = 3
+
+# File extensions the app knows how to read.
+SUPPORTED_EXTENSIONS = ["csv", "txt", "tsv", "xlsx", "xls"]
+
+
+class DataLoadError(ValueError):
+    """Raised when an uploaded file cannot be read or does not contain valid ID/X/Y data.
+
+    The message is written to be shown directly to the user, so it should explain
+    both *what* went wrong and *what to do* about it.
+    """
+    pass
+
+
+def _first_row_is_header(raw: pd.DataFrame) -> bool:
+    """Decide whether the first row of a header-less read is actually a header.
+
+    Rule: a header row contains text labels (e.g. "ID", "X", "Y"), so at least one
+    value is non-numeric. A real data row (e.g. "0", "0", "0") is fully numeric.
+    Therefore: first row is a header  <=>  it is NOT entirely numeric.
+    """
+    if raw is None or raw.empty:
+        return False
+    first = raw.iloc[0]
+    numeric = pd.to_numeric(first, errors="coerce")
+    return not bool(numeric.notna().all())
+
+
+def _apply_header(raw: pd.DataFrame) -> pd.DataFrame:
+    """Promote the first row to column names if it looks like a header.
+
+    The file is always read with header=None first; here we fix it up:
+      - header present  -> use row 0 as column names, keep the rest as data
+      - no header        -> keep positional names (0, 1, 2, ...) and ALL rows as data
+    This is what prevents a header-less file like "0,0,0 / 1,0,1 / ..." from losing
+    its first row (which pandas would otherwise swallow as the header).
+    """
+    if _first_row_is_header(raw):
+        header = raw.iloc[0].astype(str).str.strip().tolist()
+        body = raw.iloc[1:].reset_index(drop=True)
+        body.columns = header
+        return body
+    return raw
+
+
+def _read_raw_table(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Read an uploaded file into a raw DataFrame based on its extension.
+
+    Supports CSV / TXT / TSV (delimiter is auto-detected) and Excel (.xlsx/.xls).
+    Raises DataLoadError with a user-friendly message on any failure.
+    """
+    ext = Path(str(filename)).suffix.lower().lstrip(".")
+
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise DataLoadError(
+            f"Unsupported file type: '.{ext}'. "
+            f"Please upload one of: {', '.join('.' + e for e in SUPPORTED_EXTENSIONS)}. "
+            "The file must contain three columns: ID, X, Y."
+        )
+
+    # ---- Excel ----
+    if ext in ("xlsx", "xls"):
         try:
-            df = pd.read_csv(io.BytesIO(file_bytes), sep=sep, engine="python")
-            if df is not None and df.shape[1] >= 3:
+            # Read WITHOUT assuming a header, then decide if the top row is one.
+            raw = pd.read_excel(io.BytesIO(file_bytes), header=None)
+        except Exception as e:
+            raise DataLoadError(
+                "Could not read the Excel file. Make sure it is a valid, "
+                "non-empty .xlsx/.xls file with X, Y (and optionally ID) columns "
+                f"on the first sheet. (Technical detail: {e})"
+            )
+        if raw is None or raw.empty:
+            raise DataLoadError(
+                "The Excel file was opened but is empty. "
+                "It should contain three columns: ID, X, Y."
+            )
+        return _apply_header(raw)
+
+    # ---- Text-based: CSV / TXT / TSV ----
+    # Try common delimiters in order; the first that yields >= 3 columns wins.
+    #   ","  ";"  "\t"  -> standard CSV/TSV style files (also handles "0, 0, 0" with
+    #                      skipinitialspace=True, which strips the space after a comma)
+    #   r"\s+"          -> space-separated OR column-aligned .txt (e.g. "A   0.0   0.0")
+    #   None            -> last-resort auto-sniff (unreliable on aligned text, so it's last)
+    # We read with header=None here and decide about the header separately in
+    # _apply_header(), so that files WITHOUT a header row (just numbers) are not
+    # corrupted by pandas treating their first data row as column names.
+    raw = None
+    for sep in [",", ";", "\t", r"\s+", None]:
+        try:
+            candidate = pd.read_csv(
+                io.BytesIO(file_bytes),
+                sep=sep,
+                engine="python",
+                header=None,
+                skipinitialspace=True,  # turns "0, 0, 0" into clean 0 | 0 | 0
+            )
+            if candidate is not None and candidate.shape[1] >= 3:
+                raw = candidate
                 break
+            if raw is None:
+                raw = candidate  # keep something to report on if nothing reaches 3 cols
         except Exception:
-            df = None
+            continue
 
-    if df is None or df.empty:
-        raise ValueError("Could not read CSV. Expected columns: ID, X, Y.")
+    if raw is None or raw.empty:
+        raise DataLoadError(
+            f"Could not read the '.{ext}' file as a table. "
+            "Make sure the columns are separated by commas, semicolons, tabs, or spaces, "
+            "and that the file contains three columns: ID, X, Y."
+        )
+    return _apply_header(raw)
 
+
+def _normalize_xy(df: pd.DataFrame) -> pd.DataFrame:
+    """Pick the ID/X/Y columns, coerce to the right types, and drop bad rows."""
     df = df.rename(columns={c: str(c).strip() for c in df.columns})
+
+    if df.shape[1] < 3:
+        raise DataLoadError(
+            f"The file has only {df.shape[1]} column(s), but 3 are required: ID, X, Y."
+        )
+
     lower_map = {c.lower().strip(): c for c in df.columns}
 
     def pick(opts: List[str]) -> Optional[str]:
@@ -106,6 +227,7 @@ def load_xy_csv(file_bytes: bytes) -> pd.DataFrame:
     y_col = pick(["y", "ycoord", "y_coord", "y-coordinate"])
 
     if id_col is None or x_col is None or y_col is None:
+        # Fall back to the first three columns by position.
         cols = list(df.columns[:3])
         id_col, x_col, y_col = cols[0], cols[1], cols[2]
 
@@ -115,7 +237,33 @@ def load_xy_csv(file_bytes: bytes) -> pd.DataFrame:
     out["X"] = pd.to_numeric(out["X"], errors="coerce")
     out["Y"] = pd.to_numeric(out["Y"], errors="coerce")
     out = out.dropna(subset=["ID", "X", "Y"]).reset_index(drop=True)
+
+    if out.empty:
+        raise DataLoadError(
+            "The file was read, but no valid numeric rows were found. "
+            "Check that the X and Y columns contain numbers and that the file "
+            "has ID, X, Y columns."
+        )
     return out
+
+
+def load_xy_table(file_bytes: bytes, filename: str) -> pd.DataFrame:
+    """Load any supported file into a clean ID/X/Y DataFrame.
+
+    Raises DataLoadError (with a user-facing message) on any problem.
+    """
+    raw = _read_raw_table(file_bytes, filename)
+    return _normalize_xy(raw)
+
+
+# Backwards-compatible alias (older code / callers may still use this name).
+def load_xy_csv(file_bytes: bytes) -> pd.DataFrame:
+    return load_xy_table(file_bytes, "data.csv")
+
+
+def particle_point_counts(df_xy: pd.DataFrame) -> pd.Series:
+    """Number of coordinate points per particle ID."""
+    return df_xy.groupby("ID").size()
 
 
 def make_id_mapping(original_ids: List[str]) -> Dict[str, str]:
@@ -931,7 +1079,21 @@ def contour_fit_metrics(x, y, xt, yt, m: int = 200) -> Tuple[float, float]:
 st.set_page_config(page_title="Shape Analysis", layout="wide")
 st.title("🔬 Shape Analysis with Elliptic Fourier Descriptors")
 
-uploaded = st.sidebar.file_uploader("Upload CSV (ID, X, Y)", type=["csv"])
+uploaded = st.sidebar.file_uploader(
+    "Upload data file (ID, X, Y)",
+    type=SUPPORTED_EXTENSIONS,
+    help=(
+        "Supported formats: "
+        + ", ".join("." + e for e in SUPPORTED_EXTENSIONS)
+        + ". The file must contain three columns: ID, X, Y."
+    ),
+)
+# Visible note (not just a tooltip) so users immediately see which formats work.
+st.sidebar.caption(
+    "✅ Accepted formats: "
+    + ", ".join("**." + e + "**" for e in SUPPORTED_EXTENSIONS)
+    + ". Columns can be separated by commas, tabs, or spaces."
+)
 
 EXPANDED = True
 
@@ -955,8 +1117,12 @@ with st.sidebar.expander("📏 Set Scale & Units", expanded=True):
         f"Example: 1 px = {1 / px_per_mm:.4f} mm = {1 / px_per_mm / UNIT_OPTIONS[selected_unit]:.4f} {selected_unit.split()[0]}")
 
 if uploaded is None:
-    st.info("⬅️ Upload a CSV to start.")
-    st.caption("Expected columns: ID, X, Y.")
+    st.info("⬅️ Upload a data file to start.")
+    st.caption(
+        "Supported formats: "
+        + ", ".join("." + e for e in SUPPORTED_EXTENSIONS)
+        + ". Expected columns: ID, X, Y."
+    )
     st.stop()
 
 file_bytes = uploaded.getvalue()
@@ -964,14 +1130,94 @@ file_hash = hashlib.md5(file_bytes).hexdigest()
 
 
 @st.cache_data(show_spinner=False)
-def _load_cached(h: str, b: bytes) -> pd.DataFrame:
-    return load_xy_csv(b)
+def _load_cached(h: str, b: bytes, name: str) -> pd.DataFrame:
+    return load_xy_table(b, name)
 
 
-df_xy = _load_cached(file_hash, file_bytes)
-if df_xy.empty:
-    st.error("CSV loaded but has no valid rows for ID/X/Y.")
+try:
+    df_xy = _load_cached(file_hash, file_bytes, uploaded.name)
+except DataLoadError as e:
+    # Friendly, actionable message for an unreadable / wrong-format / empty file.
+    st.error(f"❌ Could not use this file.\n\n{e}")
     st.stop()
+except Exception as e:
+    st.error(
+        "❌ Unexpected error while reading the file. Please check that it is a valid "
+        f"data file with ID, X, Y columns.\n\n(Technical detail: {e})"
+    )
+    st.stop()
+
+if df_xy.empty:
+    st.error(
+        "❌ The file was read but contains no valid rows. "
+        "Make sure the ID, X, and Y columns are present and that X/Y are numbers."
+    )
+    st.stop()
+
+# -----------------------------------------------------------------------------
+# Point-count check (the "fewer than 3 points" model)
+# -----------------------------------------------------------------------------
+# We count how many (X, Y) points each particle has, then split them into:
+#     valid     -> count >= MIN_POINTS_PER_PARTICLE  (can be analyzed)
+#     too_small -> count <  MIN_POINTS_PER_PARTICLE  (must be skipped)
+# Two outcomes:
+#   1) If NOTHING is valid  -> hard stop with a clear explanation.
+#   2) If SOME are valid     -> keep going, but warn which ones are skipped and why.
+counts = particle_point_counts(df_xy)                      # points per particle ID
+valid_particles = counts[counts >= MIN_POINTS_PER_PARTICLE]
+too_small = counts[counts < MIN_POINTS_PER_PARTICLE]
+
+# Case 1: no usable particle at all -> stop and explain.
+if valid_particles.empty:
+    largest = int(counts.max()) if len(counts) else 0
+
+    # Special, very common cause: the FIRST column is a point index (0,1,2,3...)
+    # rather than a particle ID, so every row becomes its own 1-point "particle".
+    every_row_is_a_particle = (len(counts) == len(df_xy)) and bool((counts == 1).all())
+    hint = ""
+    if every_row_is_a_particle:
+        hint = (
+            "\n\n💡 **Most likely cause:** the first column is being read as the "
+            "particle **ID**, but here every row has a different value in it "
+            "(e.g. 0, 1, 2, 3...), so each point is treated as a separate particle. "
+            "If all these points belong to **one** particle, give them the **same ID** "
+            "in the first column, like:\n\n"
+            "```\nID,X,Y\n0,0,0\n0,0,1\n0,1,1\n0,1,0\n```\n"
+            "(Same ID `0` on every row = one particle with 4 points.)"
+        )
+
+    st.error(
+        f"❌ Nothing can be analyzed: every particle has fewer than "
+        f"**{MIN_POINTS_PER_PARTICLE}** points.\n\n"
+        f"A particle outline is a closed shape, so it needs at least "
+        f"**{MIN_POINTS_PER_PARTICLE}** (X, Y) points (a triangle is the smallest "
+        f"possible shape). The biggest particle in this file has only **{largest}** "
+        f"point(s)."
+        + hint
+        + f"\n\n**What to do:** make sure each particle's outline has at least "
+        f"{MIN_POINTS_PER_PARTICLE} points sharing the same ID, and that X and Y are "
+        f"numbers (text values get dropped automatically)."
+    )
+    st.stop()
+
+# Case 2: some particles are too small -> warn, list them, and show the counts.
+if not too_small.empty:
+    preview = ", ".join(str(i) for i in too_small.index[:10])
+    more = "" if len(too_small) <= 10 else f" (+{len(too_small) - 10} more)"
+    st.warning(
+        f"⚠️ {len(too_small)} of {len(counts)} particle(s) have fewer than "
+        f"{MIN_POINTS_PER_PARTICLE} points and will be **skipped**: {preview}{more}.\n\n"
+        f"The remaining **{len(valid_particles)}** particle(s) will still be analyzed."
+    )
+    # Small table so the user can see exactly which IDs and how many points each has.
+    with st.expander("See skipped particles"):
+        skipped_tbl = (
+            too_small.rename("Points")
+            .reset_index()
+            .rename(columns={"index": "ID"})
+            .sort_values("Points")
+        )
+        st.dataframe(skipped_tbl, use_container_width=True, hide_index=True)
 
 original_ids = df_xy["ID"].dropna().astype(str).unique().tolist()
 id_map = make_id_mapping(original_ids)
@@ -1004,8 +1250,12 @@ if module == "Module 1":
     x = g["X"].to_numpy(dtype=float)
     y = g["Y"].to_numpy(dtype=float)
 
-    if len(x) < 3:
-        st.error("This particle has <3 points.")
+    if len(x) < MIN_POINTS_PER_PARTICLE:
+        st.error(
+            f"❌ Particle **{chosen_display}** has only **{len(x)}** point(s). "
+            f"At least **{MIN_POINTS_PER_PARTICLE}** are required to build an outline. "
+            "Please pick a different particle, or re-export this one with more points."
+        )
         st.stop()
 
     area_px2 = float(OutlineArea(x, y))
